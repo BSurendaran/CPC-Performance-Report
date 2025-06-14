@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-import re
 from fpdf import FPDF
-import io
+import re
+from io import BytesIO
 
 st.set_page_config(layout="wide")
-st.title("CPC Performance Report")
+st.title("CPC Performance Report 📊")
 
-uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("📁 Upload Excel or CSV File", type=["xlsx", "csv"])
 
 COLUMN_MAPPING = {
     "OUTLET": "Outlet",
@@ -35,10 +35,7 @@ def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is
             y=df_grouped[month],
             name=month,
             marker_color=color_palette[i % len(color_palette)],
-            text=[
-                f"₹ {val:,.2f}" if is_currency and isinstance(val, (int, float)) else f"{val}"
-                for val in df_grouped[month]
-            ],
+            text=[f"₹ {val:,.2f}" if is_currency else f"{val}" for val in df_grouped[month]],
             hovertemplate='%{x}<br>%{text}<extra>%{name}</extra>',
         ))
 
@@ -48,7 +45,7 @@ def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is
     y_pad = max_y * 0.05
 
     fig.update_layout(
-        title=dict(text=f"{title} – {sheet_name}", font=dict(color='white')),
+        title=dict(text=f"{title} - {sheet_name}", font=dict(color='white')),
         xaxis=dict(title=dict(text="Outlet Group", font=dict(color='white')), tickfont=dict(color='white')),
         yaxis=dict(
             title=dict(text=yaxis_title, font=dict(color='white')),
@@ -69,7 +66,7 @@ def generate_pdf_from_dataframe(df: pd.DataFrame, title: str) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", size=14)
-    safe_title = title.encode('latin-1', 'replace').decode('latin-1')  # Avoid encoding errors
+    safe_title = title.encode('latin-1', 'replace').decode('latin-1')
     pdf.cell(200, 10, txt=safe_title, ln=True, align='C')
     pdf.ln(10)
 
@@ -88,19 +85,18 @@ def generate_pdf_from_dataframe(df: pd.DataFrame, title: str) -> bytes:
         pdf.cell(col_width, row_height, txt=str(row.Index), border=1)
         for val in row[1:]:
             safe_val = str(val).encode('latin-1', 'replace').decode('latin-1')
-            pdf.cell(col_width, row_height, txt=safe_val, border=1)
+            pdf.cell(col_width, row_height, txt=safe_val[:15], border=1)
         pdf.ln(row_height)
 
-    output = io.BytesIO()
-    pdf.output(output)
-    output.seek(0)
-    return output.read()
+    pdf_bytes = pdf.output(dest='S').encode('latin-1')
+    return pdf_bytes
 
 def process_sheet(df, sheet_name="Sheet"):
     df = clean_dataframe(df)
 
     required_cols = {'PO Number', 'PO Value', 'PO Date', 'Outlet', 'Outlet Group'}
     if not required_cols.issubset(df.columns):
+        st.warning(f"Missing columns in {sheet_name}")
         return
 
     try:
@@ -143,9 +139,7 @@ def process_sheet(df, sheet_name="Sheet"):
         # 📋 Matrix Report
         st.subheader(f"📋 Matrix Report – {sheet_name}")
         subcategory_col = next((col for col in df.columns if 'SUB' in col.upper()), None)
-        group_cols = []
-        if subcategory_col:
-            group_cols.append(subcategory_col)
+        group_cols = [subcategory_col] if subcategory_col else []
 
         matrix_count = df.groupby(group_cols + ['Month'])['PO Number'].nunique().unstack().fillna(0)
         matrix_count = matrix_count[filtered_months]
@@ -163,21 +157,20 @@ def process_sheet(df, sheet_name="Sheet"):
             for col in matrix_combined.columns
         }), use_container_width=True)
 
-        # 📥 PDF Download Button
-        title = f"Matrix Report – {sheet_name} – {', '.join(filtered_months)}"
-        pdf_bytes = generate_pdf_from_dataframe(matrix_combined, title=title)
-
+        # 📄 PDF Download Button
+        pdf_title = f"PO_Report_{sheet_name}_{'_'.join(selected_months)}"
+        pdf_data = generate_pdf_from_dataframe(matrix_combined, pdf_title)
         st.download_button(
-            label="📥 Download Matrix Report as PDF",
-            data=pdf_bytes,
-            file_name=f"{sheet_name}_Matrix_Report_{'_'.join(filtered_months)}.pdf",
-            mime="application/pdf"
+            label=f"📄 Download Report PDF – {sheet_name}",
+            data=pdf_data,
+            file_name=f"{pdf_title}.pdf",
+            mime='application/pdf'
         )
 
     except Exception as e:
-        st.error(f"Error in {sheet_name}: {e}")
+        st.error(f"❌ Error in {sheet_name}: {e}")
 
-# 📁 File Upload Handling
+# 📁 File Upload Handler
 if uploaded_file:
     try:
         if uploaded_file.name.endswith(".csv"):
