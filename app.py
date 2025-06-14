@@ -3,17 +3,18 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import re
+import matplotlib.pyplot as plt
 from io import BytesIO
-from PIL import Image
 from fpdf import FPDF
-import plotly.io as pio
+import tempfile
 import os
 
 st.set_page_config(layout="wide")
 st.title("📊 CPC Performance Report with PDF Export")
 
-uploaded_file = st.file_uploader("📁 Upload Excel or CSV File", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
 
+# Column mapping
 COLUMN_MAPPING = {
     "OUTLET": "Outlet",
     "PO REF NO": "PO Number",
@@ -23,16 +24,12 @@ COLUMN_MAPPING = {
 
 COLORS = px.colors.qualitative.Bold
 
-
 def clean_dataframe(df):
     df = df.rename(columns={k: v for k, v in COLUMN_MAPPING.items() if k in df.columns})
     df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
-
     if "Outlet" in df.columns:
         df['Outlet Group'] = df['Outlet'].apply(lambda x: re.split(r"[-\s\d]", str(x))[0].strip().upper())
-
     return df
-
 
 def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is_currency=True):
     fig = go.Figure()
@@ -72,47 +69,44 @@ def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is
     )
     return fig
 
+def save_fig_as_image(fig, filename):
+    img_bytes = fig.to_image(format="png")
+    with open(filename, "wb") as f:
+        f.write(img_bytes)
 
-def fig_to_image(fig):
-    img_bytes = fig.to_image(format="png", width=900, height=500, engine="kaleido")
-    return Image.open(BytesIO(img_bytes))
-
-
-def generate_pdf_from_dataframe_with_charts(df, title, chart_imgs):
+def generate_pdf_report(matrix_combined, po_value_fig, po_count_fig, title_months, sheet_name):
     pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+
     pdf.add_page()
-    pdf.set_font("Arial", "B", size=14)
-    safe_title = title.encode('latin-1', 'replace').decode('latin-1')
-    pdf.cell(200, 10, txt=safe_title, ln=True, align='C')
-    pdf.ln(10)
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 10, f"CPC Performance Report – {sheet_name} – {title_months}", ln=True, align="C")
 
-    for img in chart_imgs:
-        pdf.image(img, x=10, w=190)
-        pdf.ln(5)
+    for title, fig in [("PO Value", po_value_fig), ("PO Count", po_count_fig)]:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
+            save_fig_as_image(fig, tmp_img.name)
+            pdf.image(tmp_img.name, w=180)
+            os.remove(tmp_img.name)
 
-    pdf.set_font("Arial", size=10)
-    col_width = pdf.w / (len(df.columns) + 1)
-    row_height = 8
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 10, "Matrix Report", ln=True)
 
-    for col in df.columns:
-        safe_col = str(col).encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(col_width, row_height, txt=safe_col[:15], border=1)
-    pdf.ln(row_height)
+    pdf.set_font("Arial", "", 10)
+    for i, row in matrix_combined.reset_index().iterrows():
+        line = ' | '.join(f"{k}: {v}" for k, v in row.items())
+        pdf.multi_cell(0, 10, line)
 
-    for row in df.itertuples(index=True):
-        pdf.cell(col_width, row_height, txt=str(row.Index)[:15], border=1)
-        for val in row[1:]:
-            safe_val = str(val).encode('latin-1', 'replace').decode('latin-1')
-            pdf.cell(col_width, row_height, txt=safe_val[:15], border=1)
-        pdf.ln(row_height)
-
-    return pdf.output(dest="S").encode("latin-1")
-
+    pdf_output = BytesIO()
+    pdf.output(pdf_output)
+    pdf_output.seek(0)
+    return pdf_output
 
 def process_sheet(df, sheet_name="Sheet"):
     df = clean_dataframe(df)
+
     required_cols = {'PO Number', 'PO Value', 'PO Date', 'Outlet', 'Outlet Group'}
     if not required_cols.issubset(df.columns):
+        st.warning(f"Missing required columns in {sheet_name}")
         return
 
     try:
@@ -133,24 +127,23 @@ def process_sheet(df, sheet_name="Sheet"):
             return
 
         filtered_months = month_order_df[month_order_df['Month'].isin(selected_months)]['Month']
+        title_months = ", ".join(filtered_months)
 
         value_grouped = df.groupby(['Outlet Group', 'Month'])['PO Value'].sum().unstack().fillna(0)
         value_grouped = value_grouped[filtered_months]
-        value_fig = plot_bar_chart(value_grouped, "PO Value", "Value (₹)", sheet_name, COLORS, is_currency=True)
-        st.subheader(f"💰 PO Value – {sheet_name}")
-        st.plotly_chart(value_fig, use_container_width=True)
+        st.subheader(f"💰 PO Value – {sheet_name} ({title_months})")
+        po_value_fig = plot_bar_chart(value_grouped, "PO Value", "Value (₹)", sheet_name, COLORS, is_currency=True)
+        st.plotly_chart(po_value_fig, use_container_width=True)
 
         count_grouped = df.groupby(['Outlet Group', 'Month'])['PO Number'].nunique().unstack().fillna(0)
         count_grouped = count_grouped[filtered_months]
-        count_fig = plot_bar_chart(count_grouped, "PO Count", "Number of POs", sheet_name, COLORS, is_currency=False)
-        st.subheader(f"🔢 PO Count – {sheet_name}")
-        st.plotly_chart(count_fig, use_container_width=True)
+        st.subheader(f"🔢 PO Count – {sheet_name} ({title_months})")
+        po_count_fig = plot_bar_chart(count_grouped, "PO Count", "Number of POs", sheet_name, COLORS, is_currency=False)
+        st.plotly_chart(po_count_fig, use_container_width=True)
 
-        st.subheader(f"📋 Matrix Report – {sheet_name}")
+        st.subheader(f"📋 Matrix Report – {sheet_name} ({title_months})")
         subcategory_col = next((col for col in df.columns if 'SUB' in col.upper()), None)
-        group_cols = []
-        if subcategory_col:
-            group_cols.append(subcategory_col)
+        group_cols = [subcategory_col] if subcategory_col else []
 
         matrix_count = df.groupby(group_cols + ['Month'])['PO Number'].nunique().unstack().fillna(0)
         matrix_count = matrix_count[filtered_months]
@@ -168,45 +161,26 @@ def process_sheet(df, sheet_name="Sheet"):
             for col in matrix_combined.columns
         }), use_container_width=True)
 
-        # PDF generation
-        title_months = "_".join(selected_months)
-        pdf_title = f"{sheet_name}_Report_{title_months}"
-        chart_images = []
-
-        for fig in [value_fig, count_fig]:
-            img = fig_to_image(fig)
-            img_io = BytesIO()
-            img.save(img_io, format='PNG')
-            img_path = f"temp_{sheet_name}.png"
-            with open(img_path, "wb") as f:
-                f.write(img_io.getvalue())
-            chart_images.append(img_path)
-
-        pdf_data = generate_pdf_from_dataframe_with_charts(matrix_combined, pdf_title, chart_images)
+        # 📤 PDF download
+        pdf_bytes = generate_pdf_report(matrix_combined, po_value_fig, po_count_fig, title_months, sheet_name)
         st.download_button(
-            label="📥 Download Report as PDF",
-            data=pdf_data,
-            file_name=f"{pdf_title}.pdf",
+            label="📥 Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{sheet_name}_Report_{title_months.replace(', ', '_')}.pdf",
             mime="application/pdf"
         )
-
-        # Cleanup temp images
-        for path in chart_images:
-            if os.path.exists(path):
-                os.remove(path)
 
     except Exception as e:
         st.error(f"❌ Error in {sheet_name}: {e}")
 
-
-# 🔁 Handle File Upload
+# 🗂️ Upload Handler
 if uploaded_file:
     try:
         if uploaded_file.name.endswith(".csv"):
             df = pd.read_csv(uploaded_file)
             process_sheet(df, "CSV")
         else:
-            all_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+            all_sheets = pd.read_excel(uploaded_file, sheet_name=None, engine="openpyxl")
             for sheet_name, df in all_sheets.items():
                 process_sheet(df, sheet_name)
     except Exception as e:
