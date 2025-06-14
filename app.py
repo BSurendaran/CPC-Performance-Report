@@ -5,7 +5,7 @@ import plotly.express as px
 import re
 
 st.set_page_config(layout="wide")
-st.title("📦 PO Report – Interactive Charts by Outlet, Month & Subcategory")
+st.title("CPC Performance Report")
 
 uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
 
