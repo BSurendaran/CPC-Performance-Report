@@ -38,57 +38,52 @@ def save_chart_as_image(fig):
 
 
 class PDF(FPDF):
-    def __init__(self):
-        super().__init__()
-        self.set_auto_page_break(auto=True, margin=10)
-        self.set_font("Arial", size=10)
-
     def header(self):
-        self.set_font("Arial", 'B', 12)
-        self.cell(0, 10, 'CPC Performance Report', ln=True, align='C')
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, self.title, ln=True, align='C')
         self.ln(5)
+
+    def add_image(self, path, title):
+        self.add_page()
+        self.set_font("Arial", size=12)
+        self.cell(0, 10, title, ln=True)
+        self.image(path, x=10, y=25, w=190)
 
     def add_matrix_table(self, df, title):
         self.add_page()
         self.set_font("Arial", 'B', 11)
         self.cell(0, 10, title, ln=True)
 
-        col_width = self.epw / len(df.columns)
+        col_width = (self.w - 2 * self.l_margin) / len(df.columns)
         row_height = 6
 
         self.set_font("Arial", 'B', 10)
         for col in df.columns:
-            self.cell(col_width, row_height, col, border=1, align='C')
+            self.cell(col_width, row_height, str(col), border=1, align='C')
         self.ln()
 
         self.set_font("Arial", '', 9)
         for idx, row in df.iterrows():
             self.cell(col_width, row_height, str(idx), border=1)
             for item in row:
-                formatted = f"{item:,.2f}" if isinstance(item, float) and "Value" in df.columns[df.columns.get_loc(item)] else str(item)
+                formatted = f"{item:,.2f}" if isinstance(item, float) else str(item)
                 self.cell(col_width, row_height, formatted, border=1, align='R')
             self.ln()
 
 
-def generate_pdf(title, value_img_path, count_img_path, matrix_df, matrix_title):
+def generate_pdf(sheet_name, value_img, count_img, matrix_df):
     pdf = PDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-    pdf.cell(0, 10, title.replace("–", "-"), ln=True)
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_title(f"{sheet_name} Report")
 
-    if value_img_path:
-        pdf.image(value_img_path, x=10, y=30, w=190)
-    if count_img_path:
-        pdf.image(count_img_path, x=10, y=130, w=190)
+    pdf.add_image(value_img, f"PO Value – {sheet_name}")
+    pdf.add_image(count_img, f"PO Count – {sheet_name}")
+    pdf.add_matrix_table(matrix_df, f"Matrix Report – {sheet_name}")
 
-    # Matrix Report
-    pdf.add_matrix_table(matrix_df, matrix_title)
-
-    pdf_buffer = BytesIO()
-    pdf_bytes = pdf.output(dest='S').encode('latin1')
-    pdf_buffer.write(pdf_bytes)
-    pdf_buffer.seek(0)
-    return pdf_buffer
+    buffer = BytesIO()
+    pdf.output(buffer)
+    buffer.seek(0)
+    return buffer
 
 
 def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is_currency=True):
@@ -167,6 +162,7 @@ def process_sheet(df, sheet_name="Sheet"):
 
     matrix_combined = pd.concat([matrix_count, matrix_value], axis=1, keys=['PO No', 'PO Value'])
     matrix_combined.columns = [' '.join(col).strip() for col in matrix_combined.columns.values]
+
     st.dataframe(matrix_combined.style.format({
         col: "\u20B9 {:,.2f}" if "Value" in col else "{:,.0f}"
         for col in matrix_combined.columns
@@ -176,13 +172,7 @@ def process_sheet(df, sheet_name="Sheet"):
     if st.button(f"\U0001F4C4 Download {sheet_name} Report as PDF"):
         value_img_path = save_chart_as_image(value_fig)
         count_img_path = save_chart_as_image(count_fig)
-        pdf_buffer = generate_pdf(
-            f"{sheet_name} Report",
-            value_img_path,
-            count_img_path,
-            matrix_combined.reset_index(),
-            f"Matrix Report – {sheet_name}"
-        )
+        pdf_buffer = generate_pdf(sheet_name, value_img_path, count_img_path, matrix_combined)
         st.download_button(
             label=f"\U0001F4E5 Save {sheet_name} Report PDF",
             data=pdf_buffer,
