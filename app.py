@@ -13,7 +13,6 @@ st.title("CPC Performance Report")
 
 uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
 
-# Column mapping
 COLUMN_MAPPING = {
     "OUTLET": "Outlet",
     "PO REF NO": "PO Number",
@@ -38,29 +37,53 @@ def save_chart_as_image(fig):
     return temp_file.name
 
 
-def generate_pdf(title, value_img_path, count_img_path, matrix_df):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
+class PDF(FPDF):
+    def __init__(self):
+        super().__init__()
+        self.set_auto_page_break(auto=True, margin=10)
+        self.set_font("Arial", size=10)
+
+    def header(self):
+        self.set_font("Arial", 'B', 12)
+        self.cell(0, 10, 'CPC Performance Report', ln=True, align='C')
+        self.ln(5)
+
+    def add_matrix_table(self, df, title):
+        self.add_page()
+        self.set_font("Arial", 'B', 11)
+        self.cell(0, 10, title, ln=True)
+
+        col_width = self.epw / len(df.columns)
+        row_height = 6
+
+        self.set_font("Arial", 'B', 10)
+        for col in df.columns:
+            self.cell(col_width, row_height, col, border=1, align='C')
+        self.ln()
+
+        self.set_font("Arial", '', 9)
+        for idx, row in df.iterrows():
+            self.cell(col_width, row_height, str(idx), border=1)
+            for item in row:
+                formatted = f"{item:,.2f}" if isinstance(item, float) and "Value" in df.columns[df.columns.get_loc(item)] else str(item)
+                self.cell(col_width, row_height, formatted, border=1, align='R')
+            self.ln()
+
+
+def generate_pdf(title, value_img_path, count_img_path, matrix_df, matrix_title):
+    pdf = PDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-    pdf.cell(200, 10, txt=title.replace("–", "-"), ln=True)
+    pdf.cell(0, 10, title.replace("–", "-"), ln=True)
 
-    # Add charts
     if value_img_path:
         pdf.image(value_img_path, x=10, y=30, w=190)
     if count_img_path:
         pdf.image(count_img_path, x=10, y=130, w=190)
 
-    # Add Matrix Report
-    pdf.add_page()
-    pdf.set_font("Arial", size=11)
-    pdf.cell(200, 10, txt="Matrix Report", ln=True)
+    # Matrix Report
+    pdf.add_matrix_table(matrix_df, matrix_title)
 
-    matrix_text = matrix_df.to_string(index=True)
-    for line in matrix_text.split('\n'):
-        pdf.cell(0, 6, txt=line, ln=True)
-
-    # Export as PDF in memory
     pdf_buffer = BytesIO()
     pdf_bytes = pdf.output(dest='S').encode('latin1')
     pdf_buffer.write(pdf_bytes)
@@ -132,9 +155,7 @@ def process_sheet(df, sheet_name="Sheet"):
     # Matrix Report
     st.subheader(f"\U0001F4CB Matrix Report – {sheet_name}")
     subcategory_col = next((col for col in df.columns if 'SUB' in col.upper()), None)
-    group_cols = []
-    if subcategory_col:
-        group_cols.append(subcategory_col)
+    group_cols = [subcategory_col] if subcategory_col else []
 
     matrix_count = df.groupby(group_cols + ['Month'])['PO Number'].nunique().unstack().fillna(0)
     matrix_count = matrix_count[filtered_months]
@@ -155,16 +176,19 @@ def process_sheet(df, sheet_name="Sheet"):
     if st.button(f"\U0001F4C4 Download {sheet_name} Report as PDF"):
         value_img_path = save_chart_as_image(value_fig)
         count_img_path = save_chart_as_image(count_fig)
-
-        pdf_buffer = generate_pdf(f"{sheet_name} Report", value_img_path, count_img_path, matrix_combined)
-
+        pdf_buffer = generate_pdf(
+            f"{sheet_name} Report",
+            value_img_path,
+            count_img_path,
+            matrix_combined.reset_index(),
+            f"Matrix Report – {sheet_name}"
+        )
         st.download_button(
             label=f"\U0001F4E5 Save {sheet_name} Report PDF",
             data=pdf_buffer,
             file_name=f"{sheet_name}_Report.pdf",
             mime="application/pdf"
         )
-
         os.unlink(value_img_path)
         os.unlink(count_img_path)
 
