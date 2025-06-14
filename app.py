@@ -3,16 +3,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import re
-from io import BytesIO
 from fpdf import FPDF
-import base64
+import io
 
 st.set_page_config(layout="wide")
-st.title("📊 CPC Performance Report")
+st.title("CPC Performance Report")
 
-uploaded_file = st.file_uploader("📤 Upload Excel or CSV File", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader("Upload Excel or CSV File", type=["xlsx", "csv"])
 
-# Column mapping
 COLUMN_MAPPING = {
     "OUTLET": "Outlet",
     "PO REF NO": "PO Number",
@@ -22,7 +20,6 @@ COLUMN_MAPPING = {
 
 COLORS = px.colors.qualitative.Bold
 
-# 🧹 Clean & Transform
 def clean_dataframe(df):
     df = df.rename(columns={k: v for k, v in COLUMN_MAPPING.items() if k in df.columns})
     df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
@@ -30,45 +27,6 @@ def clean_dataframe(df):
         df['Outlet Group'] = df['Outlet'].apply(lambda x: re.split(r"[-\s\d]", str(x))[0].strip().upper())
     return df
 
-# 📄 PDF Generation
-def generate_pdf_from_dataframe(df: pd.DataFrame, title="Matrix Report"):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=10)
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    pdf.set_font("Arial", "B", size=14)
-    pdf.cell(200, 10, txt=title, ln=True, align='C')
-    pdf.ln(10)
-
-    pdf.set_font("Arial", size=8)
-
-    col_headers = df.reset_index().columns.tolist()
-    rows = df.reset_index().values.tolist()
-    col_widths = [30] + [25] * (len(df.columns))
-
-    # Headers
-    for i, col_name in enumerate(col_headers):
-        pdf.cell(col_widths[i], 8, str(col_name), border=1)
-    pdf.ln()
-
-    # Rows
-    for row in rows:
-        for i, item in enumerate(row):
-            pdf.cell(col_widths[i], 8, str(item), border=1)
-        pdf.ln()
-
-    pdf_output = BytesIO()
-    pdf.output(pdf_output)
-    return pdf_output.getvalue()
-
-# ⬇️ PDF download link
-def pdf_download_button(data_bytes, filename):
-    b64 = base64.b64encode(data_bytes).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{filename}">📄 Download Matrix Report as PDF</a>'
-    st.markdown(href, unsafe_allow_html=True)
-
-# 📊 Plot chart
 def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is_currency=True):
     fig = go.Figure()
     for i, month in enumerate(df_grouped.columns):
@@ -77,12 +35,16 @@ def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is
             y=df_grouped[month],
             name=month,
             marker_color=color_palette[i % len(color_palette)],
-            text=[f"₹ {val:,.2f}" if is_currency else f"{val}" for val in df_grouped[month]],
+            text=[
+                f"₹ {val:,.2f}" if is_currency and isinstance(val, (int, float)) else f"{val}"
+                for val in df_grouped[month]
+            ],
             hovertemplate='%{x}<br>%{text}<extra>%{name}</extra>',
         ))
 
-    max_y = df_grouped.values.max()
-    min_y = df_grouped.values.min()
+    all_values = df_grouped.values.flatten()
+    max_y = all_values.max()
+    min_y = all_values.min()
     y_pad = max_y * 0.05
 
     fig.update_layout(
@@ -103,7 +65,37 @@ def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is
     )
     return fig
 
-# 🔁 Process each sheet
+def generate_pdf_from_dataframe(df: pd.DataFrame, title: str) -> bytes:
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", size=14)
+    safe_title = title.encode('latin-1', 'replace').decode('latin-1')  # Avoid encoding errors
+    pdf.cell(200, 10, txt=safe_title, ln=True, align='C')
+    pdf.ln(10)
+
+    pdf.set_font("Arial", size=10)
+    col_width = pdf.w / (len(df.columns) + 1)
+    row_height = 8
+
+    # Header
+    for col in df.columns:
+        safe_col = str(col).encode('latin-1', 'replace').decode('latin-1')
+        pdf.cell(col_width, row_height, txt=safe_col, border=1)
+    pdf.ln(row_height)
+
+    # Rows
+    for row in df.itertuples(index=True):
+        pdf.cell(col_width, row_height, txt=str(row.Index), border=1)
+        for val in row[1:]:
+            safe_val = str(val).encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(col_width, row_height, txt=safe_val, border=1)
+        pdf.ln(row_height)
+
+    output = io.BytesIO()
+    pdf.output(output)
+    output.seek(0)
+    return output.read()
+
 def process_sheet(df, sheet_name="Sheet"):
     df = clean_dataframe(df)
 
@@ -133,7 +125,7 @@ def process_sheet(df, sheet_name="Sheet"):
         # 💰 PO Value Chart
         value_grouped = df.groupby(['Outlet Group', 'Month'])['PO Value'].sum().unstack().fillna(0)
         value_grouped = value_grouped[filtered_months]
-        st.subheader(f"💰 PO Value – {sheet_name} ({', '.join(filtered_months)})")
+        st.subheader(f"💰 PO Value – {sheet_name}")
         st.plotly_chart(
             plot_bar_chart(value_grouped, "PO Value", "Value (₹)", sheet_name, COLORS, is_currency=True),
             use_container_width=True
@@ -142,16 +134,18 @@ def process_sheet(df, sheet_name="Sheet"):
         # 🔢 PO Count Chart
         count_grouped = df.groupby(['Outlet Group', 'Month'])['PO Number'].nunique().unstack().fillna(0)
         count_grouped = count_grouped[filtered_months]
-        st.subheader(f"🔢 PO Count – {sheet_name} ({', '.join(filtered_months)})")
+        st.subheader(f"🔢 PO Count – {sheet_name}")
         st.plotly_chart(
             plot_bar_chart(count_grouped, "PO Count", "Number of POs", sheet_name, COLORS, is_currency=False),
             use_container_width=True
         )
 
         # 📋 Matrix Report
-        st.subheader(f"📋 Matrix Report – {sheet_name} ({', '.join(filtered_months)})")
+        st.subheader(f"📋 Matrix Report – {sheet_name}")
         subcategory_col = next((col for col in df.columns if 'SUB' in col.upper()), None)
-        group_cols = [subcategory_col] if subcategory_col else []
+        group_cols = []
+        if subcategory_col:
+            group_cols.append(subcategory_col)
 
         matrix_count = df.groupby(group_cols + ['Month'])['PO Number'].nunique().unstack().fillna(0)
         matrix_count = matrix_count[filtered_months]
@@ -164,20 +158,26 @@ def process_sheet(df, sheet_name="Sheet"):
         matrix_combined = pd.concat([matrix_count, matrix_value], axis=1, keys=['PO No', 'PO Value'])
         matrix_combined.columns = [' '.join(col).strip() for col in matrix_combined.columns.values]
 
-        # Show table
         st.dataframe(matrix_combined.style.format({
             col: "₹ {:,.2f}" if "Value" in col else "{:,.0f}"
             for col in matrix_combined.columns
         }), use_container_width=True)
 
-        # Download as PDF
-        pdf_bytes = generate_pdf_from_dataframe(matrix_combined, title=f"Matrix Report – {sheet_name} – {', '.join(filtered_months)}")
-        pdf_download_button(pdf_bytes, filename=f"Matrix_Report_{sheet_name}_{'_'.join(filtered_months)}.pdf")
+        # 📥 PDF Download Button
+        title = f"Matrix Report – {sheet_name} – {', '.join(filtered_months)}"
+        pdf_bytes = generate_pdf_from_dataframe(matrix_combined, title=title)
+
+        st.download_button(
+            label="📥 Download Matrix Report as PDF",
+            data=pdf_bytes,
+            file_name=f"{sheet_name}_Matrix_Report_{'_'.join(filtered_months)}.pdf",
+            mime="application/pdf"
+        )
 
     except Exception as e:
-        st.error(f"❌ Error in {sheet_name}: {e}")
+        st.error(f"Error in {sheet_name}: {e}")
 
-# 🔽 File Handler
+# 📁 File Upload Handling
 if uploaded_file:
     try:
         if uploaded_file.name.endswith(".csv"):
