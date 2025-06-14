@@ -76,14 +76,12 @@ def generate_pdf(sheet_name, value_img, count_img, matrix_df):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_title(f"{sheet_name} Report")
 
-    pdf.add_image(value_img, f"PO Value – {sheet_name}")
-    pdf.add_image(count_img, f"PO Count – {sheet_name}")
-    pdf.add_matrix_table(matrix_df, f"Matrix Report – {sheet_name}")
+    pdf.add_image(value_img, f"PO Value - {sheet_name}")
+    pdf.add_image(count_img, f"PO Count - {sheet_name}")
+    pdf.add_matrix_table(matrix_df, f"Matrix Report - {sheet_name}")
 
-    buffer = BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return buffer
+    pdf_bytes = pdf.output(dest='S').encode('latin-1', 'replace')  # Avoid Unicode error
+    return BytesIO(pdf_bytes)
 
 
 def plot_bar_chart(df_grouped, title, yaxis_title, sheet_name, color_palette, is_currency=True):
